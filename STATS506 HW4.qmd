@@ -1,0 +1,385 @@
+---
+title: "STATS506 HW4"
+author: "Yinuo Liu"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+---
+
+```{r}
+#1a
+library(tidyverse)
+url<-"https://phuongov.github.io/stats506-f26/data_f26/nzge.rds"
+nzge<-readRDS(base::url(url))
+glimpse(nzge)
+
+
+q1<-nzge%>%
+  group_by(election_year,voting_type)%>%
+  summarise(
+    total_votes=sum(votes,na.rm=TRUE),
+    .groups="drop"
+  )%>%
+  arrange(desc(total_votes))
+print(q1)
+#1b
+q2<-nzge%>%
+  filter(
+    election_year==2014,
+    voting_type=="Candidate",
+    party!="Informal Candidate Votes"
+  )%>%
+  group_by(party)%>%
+  summarise(
+    total_votes=sum(votes,na.rm=TRUE),
+    .groups="drop"
+  )%>%
+  mutate(proportion=total_votes/sum(total_votes))%>%
+  arrange(desc(proportion))%>%
+  mutate(
+    percent=round(proportion*100,2),
+    proportion=round(proportion,4)
+  )
+print(q2,n=Inf)
+#1c
+q3<-nzge%>%
+  filter(!str_detect(party,"^Informal "))%>%
+  group_by(election_year,voting_type,party)%>%
+  summarise(
+    total_votes=sum(votes,na.rm=TRUE),
+    .groups="drop"
+  )%>%
+  group_by(election_year,voting_type)%>%
+  slice_max(total_votes,n=1,with_ties=FALSE)%>%
+  ungroup()%>%
+  select(election_year,voting_type,party)%>%
+  pivot_wider(
+    names_from=voting_type,
+    values_from=party
+  )%>%
+  arrange(election_year)
+print(q3)
+```
+
+```{r}
+#2a
+url<-"https://raw.githubusercontent.com/azhou5849/tennis-atp-sackmann-data/master/atp_matches_2019.csv"
+tennis<-read_csv(url,show_col_types=FALSE)
+glimpse(tennis)
+
+
+atp<-tennis%>%
+  filter(
+    tourney_level!="D",
+    !tourney_name%in%c("Laver Cup","NextGen Finals")
+  )
+q1<-atp%>%
+  summarise(tournaments=n_distinct(tourney_id))
+print(q1)
+#2b
+champions<-atp%>%
+  filter(round=="F")%>%
+  distinct(tourney_id,winner_id,winner_name)
+titles<-champions%>%
+  count(winner_id,winner_name,name="titles")%>%
+  arrange(desc(titles))
+multiple_winners<-titles%>%
+  filter(titles>1)
+print(multiple_winners)
+
+
+multiple_winners%>%
+  summarise(
+    players=n(),
+    max_titles=max(titles)
+  )
+titles%>%
+  slice_max(titles,n=1,with_ties=TRUE)
+#2c
+ace_data<-atp%>%
+  filter(!is.na(w_ace),!is.na(l_ace))%>%
+  mutate(ace_diff=w_ace-l_ace)
+
+
+q3<-ace_data%>%
+  summarise(
+    matches=n(),
+    winner_avg=mean(w_ace),
+    loser_avg=mean(l_ace),
+    mean_diff=mean(ace_diff),
+    winner_more_pct=100*mean(ace_diff>0),
+    loser_more_pct=100*mean(ace_diff<0),
+    equal_pct=100*mean(ace_diff==0)
+  )%>%
+  mutate(across(where(is.numeric),~round(.x,2)))
+print(q3)
+q3%>%
+  mutate(
+    answer=paste0(
+      "Winners averaged ",winner_avg,
+      " aces per match, compared with ",
+      loser_avg," for losers. ",
+      "The mean difference was ",mean_diff,
+      " aces. Winners hit more aces in ",
+      winner_more_pct,"% of matches."
+    )
+  )%>%
+  pull(answer)%>%
+  cat()
+#2d
+player_matches<-bind_rows(
+  atp%>%
+    transmute(
+      player_id=winner_id,
+      player=winner_name,
+      won=1
+    ),
+  atp%>%
+    transmute(
+      player_id=loser_id,
+      player=loser_name,
+      won=0
+    )
+)
+
+
+player_rates<-player_matches%>%
+  group_by(player_id,player)%>%
+  summarise(
+    matches=n(),
+    wins=sum(won),
+    losses=matches-wins,
+    win_rate=wins/matches,
+    .groups="drop"
+  )%>%
+  filter(matches>=5)%>%
+  arrange(desc(win_rate))
+
+
+q4<-player_rates%>%
+  slice_max(win_rate,n=1,with_ties=TRUE)%>%
+  mutate(win_rate_pct=round(100*win_rate,2))%>%
+  select(player,matches,wins,losses,win_rate_pct)
+print(q4)
+```
+
+```{r}
+#asked chatgpt about the parameters in making a good graph
+#3a
+library(scales)
+library(slider)
+library(ggrepel)
+
+
+url<-"https://raw.githubusercontent.com/nytimes/covid-19-data/refs/heads/master/rolling-averages/us-states.csv"
+covid<-read_csv(url,show_col_types=FALSE)%>%
+  mutate(date=as.Date(date))
+
+
+theme_pub<-theme_minimal(base_size=12)+
+  theme(
+    plot.title=element_text(face="bold",size=15),
+    plot.subtitle=element_text(size=10,color="grey35"),
+    plot.caption=element_text(size=9,color="grey45"),
+    panel.grid.minor=element_blank(),
+    panel.grid.major.x=element_blank(),
+    legend.position="top",
+    plot.title.position="plot",
+    plot.margin=margin(12,18,10,12)
+  )
+
+
+national<-covid%>%
+  group_by(date)%>%
+  summarise(daily_avg=sum(cases_avg,na.rm=TRUE),.groups="drop")%>%
+  arrange(date)%>%
+  mutate(local_max=slide_dbl(daily_avg,max,.before=60,.after=60))
+
+
+peaks<-national%>%
+  filter(daily_avg==local_max,daily_avg>=25000)%>%
+  mutate(
+    gap=as.integer(date-lag(date)),
+    run=cumsum(is.na(gap)|gap>1)
+  )%>%
+  group_by(run)%>%
+  slice_head(n=1)%>%
+  ungroup()%>%
+  mutate(type=if_else(daily_avg>=150000,"Major","Minor"))%>%
+  select(date,daily_avg,type)
+
+
+invisible(Sys.setlocale("LC_TIME","C"))
+p1<-ggplot(national,aes(date,daily_avg))+
+  geom_area(fill="#DFE9F1")+
+  geom_line(color="#274D68",linewidth=0.8)+
+  geom_point(data=peaks,aes(color=type),size=3)+
+  geom_text(
+    data=peaks,
+    aes(label=format(date,"%b %Y"),color=type),
+    vjust=-1,
+    size=3,
+    check_overlap=TRUE,
+    show.legend=FALSE
+  )+
+  scale_color_manual(values=c(Major="#AC413B",Minor="#2579A0"))+
+  scale_x_date(date_breaks="6 months",date_labels="%b %Y")+
+  scale_y_continuous(
+    labels=label_number(scale=1e-3,suffix="k"),
+    expand=expansion(mult=c(0,0.15))
+  )+
+  labs(
+    title="Major and Minor COVID-19 Spikes in the U.S.",
+    x=NULL,
+    y="Daily New Cases",
+    color="Spike Type",
+    caption="Major: >=150,000 cases/day; Minor: 25,000–149,999 cases/day\nSource: The New York Times COVID-19 Data"
+  )+
+  theme_pub
+print(p1)
+#3b
+state_rates<-covid%>%
+  filter(state%in%state.name)%>%
+  group_by(state)%>%
+  summarise(
+    overall_rate=sum(cases_avg_per_100k,na.rm=TRUE),
+    .groups="drop"
+  )%>%
+  arrange(desc(overall_rate))
+
+
+extremes<-bind_rows(
+  state_rates%>%
+    slice_head(n=1)%>%
+    mutate(group="Highest overall rate"),
+  state_rates%>%
+    slice_tail(n=1)%>%
+    mutate(group="Lowest overall rate")
+)
+trajectory<-covid%>%
+  inner_join(extremes,by="state")%>%
+  mutate(panel=paste0(group,": ",state))
+
+
+p2<-ggplot(trajectory,aes(date,cases_avg_per_100k))+
+  geom_area(fill="#CFDFEB",alpha=0.85)+
+  geom_line(color="#23668E",linewidth=0.7)+
+  facet_wrap(~panel,ncol=1,scales="fixed")+
+  scale_x_date(date_breaks="6 months",date_labels="%b %Y")+
+  scale_y_continuous(labels=label_number(accuracy=1))+
+  labs(
+    title="COVID-19 Trajectories: Highest vs. Lowest Cumulative Case Rates",
+    subtitle="Daily new cases per 100,000 people (7-day rolling average)",
+    x=NULL,
+    y="Daily New Cases per 100,000",
+    caption="Source: The New York Times COVID-19 Data"
+  )+
+  theme_pub+
+  theme(strip.text=element_text(face="bold",hjust=0))
+print(p2)
+#3c
+#asked chatgpt about a NA problem while making the ggplot graph
+onsets<-covid%>%
+  filter(state%in%state.name)%>%
+  arrange(state,date)%>%
+  group_by(state)%>%
+  mutate(
+    sustained=slide_lgl(
+      cases_avg_per_100k,
+      ~all(.x>=1),
+      .after=6,
+      .complete=TRUE
+    )
+  )%>%
+  filter(sustained)%>%
+  summarise(onset=min(date),.groups="drop")%>%
+  arrange(onset,state)
+first_five<-onsets%>%
+  slice_head(n=5)
+
+
+early_states<-onsets%>%
+  slice_head(n=15)%>%
+  mutate(group=if_else(row_number()<=5,"First five","Next ten"))
+start_date<-min(early_states$onset)-7
+end_date<-max(early_states$onset)+20
+
+
+plot_data<-covid%>%
+  filter(date>=start_date,date<=end_date)%>%
+  inner_join(early_states,by="state")%>%
+  mutate(
+    state=factor(state,levels=rev(early_states$state)),
+    status=case_when(
+      is.na(cases_avg_per_100k)~"No data",
+      cases_avg_per_100k>=1~"At/above 1",
+      TRUE~"Below 1"
+    )
+  )
+marks<-early_states%>%
+  mutate(state=factor(state,levels=rev(early_states$state)))
+
+
+p3<-ggplot(plot_data,aes(date,state))+
+  geom_tile(
+    aes(fill=status),
+    width=1,
+    height=0.75
+  )+
+  geom_segment(
+    data=marks,
+    aes(x=onset,xend=onset+6,y=state,yend=state,color=group),
+    linewidth=2,
+    inherit.aes=FALSE
+  )+
+  geom_point(
+    data=marks,
+    aes(x=onset,y=state,color=group),
+    size=2.8,
+    inherit.aes=FALSE
+  )+
+  geom_label(
+    data=marks%>%filter(group=="First five"),
+    aes(x=onset+9,y=state,label=format(onset,"%b %d")),
+    size=2.7,
+    fill="white",
+    color="#AC413B",
+    inherit.aes=FALSE
+  )+
+  scale_fill_manual(
+    values=c(
+      "Below 1"="#E9EEF2",
+      "At/above 1"="#3B809E",
+      "No data"="#FFFFFF"
+    ),
+    name="Daily case rate"
+  )+
+  scale_color_manual(
+    values=c("First five"="#AC413B","Next ten"="#61737D"),
+    name="Onset group"
+  )+
+  scale_x_date(
+    date_breaks="1 week",
+    date_labels="%b %d"
+  )+
+  coord_cartesian(
+    xlim=c(start_date-1,end_date+1)
+  )+
+  labs(
+    title="The Earliest States to Experience Sustained COVID-19 Activity",
+    subtitle="First 15 states to sustain at least 1 daily case per 100,000 for 7 days",
+    x="Date (2020)",
+    y=NULL,
+    caption="Colored segments mark the first qualifying 7-day periods.\nSource: The New York Times COVID-19 Data"
+  )+
+  theme_pub+
+  theme(
+    panel.grid=element_blank(),
+    axis.text.x=element_text(angle=45,hjust=1),
+    legend.position="bottom"
+  )
+print(p3)
+```
+
+[GitHub Repository](https://github.com/Enoch12311231/STATS506-HW4)
